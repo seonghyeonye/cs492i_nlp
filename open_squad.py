@@ -1,4 +1,3 @@
-
 """
 KorQuAD open 형 데이터 processor
 
@@ -20,7 +19,6 @@ from transformers.file_utils import is_tf_available, is_torch_available
 from transformers.tokenization_bert import whitespace_tokenize
 from transformers.data.processors.utils import DataProcessor
 
-
 if is_torch_available():
     import torch
     from torch.utils.data import TensorDataset
@@ -37,7 +35,7 @@ def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer, orig_ans
 
     for new_start in range(input_start, input_end + 1):
         for new_end in range(input_end, new_start - 1, -1):
-            text_span = " ".join(doc_tokens[new_start : (new_end + 1)])
+            text_span = " ".join(doc_tokens[new_start: (new_end + 1)])
             if text_span == tok_answer_text:
                 return (new_start, new_end)
 
@@ -100,7 +98,7 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
         end_position = example.end_position
 
         # If the answer cannot be found in the text, then skip this example.
-        actual_text = " ".join(example.doc_tokens[start_position : (end_position + 1)])
+        actual_text = " ".join(example.doc_tokens[start_position: (end_position + 1)])
         cleaned_answer_text = " ".join(whitespace_tokenize(example.answer_text))
         if actual_text.find(cleaned_answer_text) == -1:
             logger.warning("Could not find answer: '%s' vs. '%s'", actual_text, cleaned_answer_text)
@@ -243,7 +241,8 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
                 span["token_type_ids"],
                 cls_index,
                 p_mask.tolist(),
-                example_index=0,  # Can not set unique_id and example_index here. They will be set after multiple processing.
+                example_index=0,
+                # Can not set unique_id and example_index here. They will be set after multiple processing.
                 unique_id=0,
                 paragraph_len=span["paragraph_len"],
                 token_is_max_context=span["token_is_max_context"],
@@ -262,7 +261,7 @@ def squad_convert_example_to_features_init(tokenizer_for_convert):
 
 
 def squad_convert_examples_to_features(
-    examples, tokenizer, max_seq_length, doc_stride, max_query_length, is_training, return_dataset=False, threads=1
+        examples, tokenizer, max_seq_length, doc_stride, max_query_length, is_training, return_dataset=False, threads=1
 ):
     """
     Converts a list of examples into a list of features that can be directly given as input to a model.
@@ -486,12 +485,12 @@ class SquadProcessor(DataProcessor):
             raise ValueError("SquadProcessor should be instantiated via SquadV1Processor or SquadV2Processor")
 
         with open(
-            os.path.join(data_dir, self.train_file if filename is None else filename), "r", encoding="utf-8"
+                os.path.join(data_dir, self.train_file if filename is None else filename), "r", encoding="utf-8"
         ) as reader:
             input_data = json.load(reader)["data"]
         return self._create_examples(input_data, "train")
 
-    def get_dev_examples(self, data_dir, filename=None):
+    def get_eval_examples(self, data_dir, filename=None):
         """
         Returns the evaluation example from the data directory.
 
@@ -507,7 +506,7 @@ class SquadProcessor(DataProcessor):
             raise ValueError("SquadProcessor should be instantiated via SquadV1Processor or SquadV2Processor")
 
         with open(
-            os.path.join(data_dir, self.dev_file if filename is None else filename), "r", encoding="utf-8"
+                os.path.join(data_dir, self.dev_file if filename is None else filename), "r", encoding="utf-8"
         ) as reader:
             input_data = json.load(reader)["data"]
         return self._create_examples(input_data, "dev")
@@ -542,7 +541,7 @@ class SquadProcessor(DataProcessor):
 
                 if not is_impossible:
                     if is_training:
-                        start_position_character = context_text.index(answer_text) #answer["answer_start"]
+                        start_position_character = context_text.index(answer_text)  # answer["answer_start"]
                     else:
                         answers = [{"text": answer_text,
                                     "answer_start": context_text.index(answer_text)}]
@@ -567,11 +566,10 @@ class SquadProcessor(DataProcessor):
                     continue
                 # train 메모리때문에 개수제한
                 per_qa_paragraph_cnt += 1
-                #if is_training:
+                # if is_training:
                 #    if per_qa_paragraph_cnt > 3: # k -1 개까지만 사용
                 #        break
                 examples.append(example)
-
 
         print("[{}] Has Answer({}) / No Answer({})".format(set_type, has_answer_cnt, no_answer_cnt))
         return examples
@@ -583,8 +581,9 @@ class SquadV1Processor(SquadProcessor):
 
 
 class SquadV2Processor(SquadProcessor):
-    train_file = "korquad_open_train.json"
-    dev_file = "korquad_open_dev.json"
+    train_file = "train_data/korquad_open_train.json"
+    dev_file = "train_data/korquad_open_dev.json"
+    test_file = "test_data/korquad_open_test.json"
 
 
 class SquadExample(object):
@@ -603,15 +602,15 @@ class SquadExample(object):
     """
 
     def __init__(
-        self,
-        qas_id,
-        question_text,
-        context_text,
-        answer_text,
-        start_position_character,
-        title,
-        answers=[],
-        is_impossible=False,
+            self,
+            qas_id,
+            question_text,
+            context_text,
+            answer_text,
+            start_position_character,
+            title,
+            answers=[],
+            is_impossible=False,
     ):
         self.qas_id = qas_id
         self.question_text = question_text
@@ -676,20 +675,20 @@ class SquadFeatures(object):
     """
 
     def __init__(
-        self,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        cls_index,
-        p_mask,
-        example_index,
-        unique_id,
-        paragraph_len,
-        token_is_max_context,
-        tokens,
-        token_to_orig_map,
-        start_position,
-        end_position,
+            self,
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            cls_index,
+            p_mask,
+            example_index,
+            unique_id,
+            paragraph_len,
+            token_is_max_context,
+            tokens,
+            token_to_orig_map,
+            start_position,
+            end_position,
     ):
         self.input_ids = input_ids
         self.attention_mask = attention_mask

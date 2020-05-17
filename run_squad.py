@@ -10,12 +10,9 @@ https://github.com/huggingface/transformers/blob/master/examples/question-answer
 
 """
 
-
 import argparse
-import glob
 import logging
 import os
-import sys
 import random
 import timeit
 
@@ -26,7 +23,6 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
 from transformers import (
-    WEIGHTS_NAME,
     AdamW,
     AlbertConfig,
     AlbertForQuestionAnswering,
@@ -49,6 +45,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
     squad_convert_examples_to_features,
 )
+
 '''
 from transformers.data.metrics.squad_metrics import (
     compute_predictions_log_probs,
@@ -57,23 +54,24 @@ from transformers.data.metrics.squad_metrics import (
 )
 from transformers.data.processors.squad import SquadResult, SquadV1Processor, SquadV2Processor
 '''
-#'''
+# '''
 # KorQuAD-Open-Naver-Search 사용할때 전처리 코드.
 from open_squad_metrics import (
     compute_predictions_log_probs,
     compute_predictions_logits,
     squad_evaluate,
-    squad_open_evaluate,
 )
 from open_squad import SquadResult, SquadV1Processor, SquadV2Processor
-#'''
+
+# '''
 
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:
     from tensorboardX import SummaryWriter
 
-from nsml import DATASET_PATH
+from nsml import DATASET_PATH, IS_ON_NSML
+import nsml
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +100,46 @@ def set_seed(args):
 
 def to_list(tensor):
     return tensor.detach().cpu().tolist()
+
+
+# NSML functions
+
+
+def _infer(model, tokenizer, my_args, root_path):
+    _, predictions = predict(my_args, model, tokenizer, val_or_test="test")
+    qid_and_answers = ["{}\t{}".format(qid, answer) for qid, answer in predictions.items()]
+    return qid_and_answers
+
+
+def bind_nsml(model, tokenizer, my_args):
+
+    def save(dir_name, *args, **kwargs):
+        os.makedirs(dir_name, exist_ok=True)
+
+        torch.save(model.state_dict(), os.path.join(dir_name, 'model.pt'))
+        tokenizer.save_pretrained(os.path.join(dir_name, 'tokenizer'))
+        torch.save(my_args, os.path.join(dir_name, "my_args.bin"))
+
+        logger.info("Save model/tokenizer/args at {}".format(dir_name))
+
+    def load(dir_name, *args, **kwargs):
+        state = torch.load(os.path.join(dir_name, 'model.pt'))
+        model.load_state_dict(state)
+
+        temp_tokenizer = tokenizer.from_pretrained(os.path.join(dir_name, 'tokenizer'))
+        nsml.copy(temp_tokenizer, tokenizer)
+
+        temp_my_args = torch.load(os.path.join(dir_name, "my_args.bin"))
+        nsml.copy(temp_my_args, my_args)
+
+        logger.info("Load model/tokenizer/args from {}".format(dir_name))
+
+    def infer(root_path):
+        _infer_result = _infer(model, tokenizer, my_args, root_path)
+        assert len(_infer_result[0].split("\t")) == 2, "Result should be 'qid<TAB>answer' format"
+        return _infer_result
+
+    nsml.bind(save=save, load=load, infer=infer)
 
 
 def train(args, train_dataset, model, tokenizer):
@@ -133,7 +171,7 @@ def train(args, train_dataset, model, tokenizer):
 
     # Check if saved optimizer or scheduler states exist
     if os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt")) and os.path.isfile(
-        os.path.join(args.model_name_or_path, "scheduler.pt")
+            os.path.join(args.model_name_or_path, "scheduler.pt")
     ):
         # Load in optimizer and scheduler states
         optimizer.load_state_dict(torch.load(os.path.join(args.model_name_or_path, "optimizer.pt")))
@@ -177,7 +215,7 @@ def train(args, train_dataset, model, tokenizer):
     # Check if continuing training from a checkpoint
     if os.path.exists(args.model_name_or_path):
         try:
-            # set global_step to gobal_step of last saved checkpoint from model path
+            # set global_step to global_step of last saved checkpoint from model path
             checkpoint_suffix = args.model_name_or_path.split("-")[-1].split("/")[0]
             global_step = int(checkpoint_suffix)
             epochs_trained = global_step // (len(train_dataloader) // args.gradient_accumulation_steps)
@@ -195,10 +233,12 @@ def train(args, train_dataset, model, tokenizer):
     train_iterator = trange(
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0]
     )
-    # Added here for reproductibility
+    # Added here for reproducibility
     set_seed(args)
 
-    for _ in train_iterator:
+    best_f1, best_exact = -1, -1
+
+    for epoch in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
 
@@ -241,6 +281,7 @@ def train(args, train_dataset, model, tokenizer):
                 loss.backward()
 
             tr_loss += loss.item()
+
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
@@ -262,35 +303,59 @@ def train(args, train_dataset, model, tokenizer):
                     logger.info("[ {} ] loss : {}".format(global_step, (tr_loss - logging_loss) / args.logging_steps))
                     logging_loss = tr_loss
 
-                # Save model checkpoint
+                logger.info("Validation start for epoch {}".format(epoch))
+                result = evaluate(args, model, tokenizer, prefix=epoch)
+                _f1, _exact = result["f1"], result["exact"]
+                is_best = _f1 > best_f1
+                best_f1 = max(_f1, best_f1)
+                logger.info("best_f1_val = {}, f1_val = {}, exact_val = {}, average loss = {}, global_step = {}, " \
+                            .format(best_f1, _f1, _exact, tr_loss, global_step))
+                if is_best:
+                    if IS_ON_NSML:
+                        nsml.save(args.model_name_or_path + "_best")
+
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
-                    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
-                    # Take care of distributed/parallel training
-                    model_to_save = model.module if hasattr(model, "module") else model
-                    model_to_save.save_pretrained(output_dir)
-                    tokenizer.save_pretrained(output_dir)
+                    if IS_ON_NSML:
+                        nsml.save(args.model_name_or_path + "_gs{}_e{}".format(global_step, epoch))
+                    else:
+                        output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
+                        # Take care of distributed/parallel training
+                        model_to_save = model.module if hasattr(model, "module") else model
+                        model_to_save.save_pretrained(output_dir)
+                        tokenizer.save_pretrained(output_dir)
 
-                    torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                    logger.info("Saving model checkpoint to %s", output_dir)
+                        torch.save(args, os.path.join(output_dir, "training_args.bin"))
+                        logger.info("Saving model checkpoint to %s", output_dir)
 
-                    torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-                    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
-                    logger.info("Saving optimizer and scheduler states to %s", output_dir)
+                        torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+                        torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+                        logger.info("Saving optimizer and scheduler states to %s", output_dir)
 
-            if args.max_steps > 0 and global_step > args.max_steps:
+            if 0 < args.max_steps < global_step:
                 epoch_iterator.close()
                 break
-        if args.max_steps > 0 and global_step > args.max_steps:
+
+        if 0 < args.max_steps < global_step:
             train_iterator.close()
             break
 
     return global_step, tr_loss / global_step
 
 
-def evaluate(args, model, tokenizer, prefix=""):
-    dataset, examples, features = load_and_cache_examples(args, tokenizer, evaluate=True, output_examples=True)
+def evaluate(args, model, tokenizer, prefix="", val_or_test="val"):
+    examples, predictions = predict(args, model, tokenizer, prefix=prefix, val_or_test=val_or_test)
+    # Compute the F1 and exact scores.
+    results = squad_evaluate(examples, predictions)
+    return results
+
+
+def predict(args, model, tokenizer, prefix="", val_or_test="val"):
+    dataset, examples, features = load_and_cache_examples(
+        args, tokenizer, evaluate=True, output_examples=True,
+        val_or_test=val_or_test,
+    )
 
     if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(args.output_dir)
@@ -414,14 +479,13 @@ def evaluate(args, model, tokenizer, prefix=""):
             tokenizer,
         )
 
-    # Compute the F1 and exact scores.
-    results = squad_evaluate(examples, predictions)
-    return results
+    return examples, predictions
 
 
-def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False):
+def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False, val_or_test="val"):
     if args.local_rank not in [-1, 0] and not evaluate:
-        # Make sure only the first process in distributed training process the dataset, and the others will use the cache
+        # Make sure only the first process in distributed training process the dataset,
+        # and the others will use the cache.
         torch.distributed.barrier()
 
     # Load data features from cache or dataset file
@@ -461,7 +525,8 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
         else:
             processor = SquadV2Processor() if args.version_2_with_negative else SquadV1Processor()
             if evaluate:
-                examples = processor.get_dev_examples(args.data_dir, filename=args.predict_file)
+                filename = args.predict_file if val_or_test == "val" else "test_data/korquad_open_test.json"
+                examples = processor.get_eval_examples(args.data_dir, filename=filename)
             else:
                 examples = processor.get_train_examples(args.data_dir, filename=args.train_file)
 
@@ -476,12 +541,13 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
             threads=args.threads,
         )
 
-        #if args.local_rank in [-1, 0]:
+        # if args.local_rank in [-1, 0]:
         #    logger.info("Saving features into cached file %s", cached_features_file)
         #    torch.save({"features": features, "dataset": dataset, "examples": examples}, cached_features_file)
 
     if args.local_rank == 0 and not evaluate:
-        # Make sure only the first process in distributed training process the dataset, and the others will use the cache
+        # Make sure only the first process in distributed training process the dataset,
+        # and the others will use the cache.
         torch.distributed.barrier()
 
     if output_examples:
@@ -521,21 +587,21 @@ def main():
         default=None,
         type=str,
         help="The input data dir. Should contain the .json files for the task."
-        + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
+             + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
     )
     parser.add_argument(
         "--train_file",
         default=None,
         type=str,
         help="The input training file. If a data dir is specified, will look for the file there"
-        + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
+             + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
     )
     parser.add_argument(
         "--predict_file",
         default=None,
         type=str,
         help="The input evaluation file. If a data dir is specified, will look for the file there"
-        + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
+             + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
     )
     parser.add_argument(
         "--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name"
@@ -570,7 +636,7 @@ def main():
         default=384,
         type=int,
         help="The maximum total input sequence length after WordPiece tokenization. Sequences "
-        "longer than this will be truncated, and sequences shorter than this will be padded.",
+             "longer than this will be truncated, and sequences shorter than this will be padded.",
     )
     parser.add_argument(
         "--doc_stride",
@@ -583,7 +649,7 @@ def main():
         default=64,
         type=int,
         help="The maximum number of tokens for the question. Questions longer than this will "
-        "be truncated to this length.",
+             "be truncated to this length.",
     )
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
@@ -629,13 +695,13 @@ def main():
         default=30,
         type=int,
         help="The maximum length of an answer that can be generated. This is needed because the start "
-        "and end predictions are not conditioned on one another.",
+             "and end predictions are not conditioned on one another.",
     )
     parser.add_argument(
         "--verbose_logging",
         action="store_true",
         help="If true, all of the warnings related to data processing will be printed. "
-        "A number of warnings are expected for a normal SQuAD evaluation.",
+             "A number of warnings are expected for a normal SQuAD evaluation.",
     )
 
     parser.add_argument("--logging_steps", type=int, default=50, help="Log every X updates steps.")
@@ -665,25 +731,29 @@ def main():
         type=str,
         default="O1",
         help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
-        "See details at https://nvidia.github.io/apex/amp.html",
+             "See details at https://nvidia.github.io/apex/amp.html",
     )
     parser.add_argument("--server_ip", type=str, default="", help="Can be used for distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="Can be used for distant debugging.")
 
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
-    args = parser.parse_args()
 
+    ### DO NOT MODIFY THIS BLOCK ###
+    # arguments for nsml
+    parser.add_argument('--pause', type=int, default=0)
+    parser.add_argument('--mode', type=str, default='train')
+    ################################
+
+    args = parser.parse_args()
 
     # for NSML
     args.data_dir = os.path.join(DATASET_PATH, args.data_dir)
 
-
-
     if (
-        os.path.exists(args.output_dir)
-        and os.listdir(args.output_dir)
-        and args.do_train
-        and not args.overwrite_output_dir
+            os.path.exists(args.output_dir)
+            and os.listdir(args.output_dir)
+            and args.do_train
+            and not args.overwrite_output_dir
     ):
         raise ValueError(
             "Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(
@@ -759,11 +829,18 @@ def main():
 
     model.to(args.device)
 
+    ### DO NOT MODIFY THIS BLOCK ###
+    if IS_ON_NSML:
+        bind_nsml(model, tokenizer, args)
+        if args.pause:
+            nsml.paused(scope=locals())
+    ################################
+
     logger.info("Training/evaluation parameters %s", args)
 
-    # Before we do anything with models, we want to ensure that we get fp16 execution of torch.einsum if args.fp16 is set.
-    # Otherwise it'll default to "promote" mode, and we'll get fp32 operations. Note that running `--fp16_opt_level="O2"` will
-    # remove the need for this code, but it is still valid.
+    # Before we do anything with models, we want to ensure that we get fp16 execution of torch.einsum if args.fp16 is
+    # set. Otherwise it'll default to "promote" mode, and we'll get fp32 operations. Note that running
+    # `--fp16_opt_level="O2"` will remove the need for this code, but it is still valid.
     if args.fp16:
         try:
             import apex
@@ -777,62 +854,6 @@ def main():
         train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False)
         global_step, tr_loss = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
-
-    # Save the trained model and the tokenizer
-    if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        # Create output directory if needed
-        if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
-            os.makedirs(args.output_dir)
-
-        logger.info("Saving model checkpoint to %s", args.output_dir)
-        # Save a trained model, configuration and tokenizer using `save_pretrained()`.
-        # They can then be reloaded using `from_pretrained()`
-        # Take care of distributed/parallel training
-        model_to_save = model.module if hasattr(model, "module") else model
-        model_to_save.save_pretrained(args.output_dir)
-        tokenizer.save_pretrained(args.output_dir)
-
-        # Good practice: save your training arguments together with the trained model
-        torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
-
-        # Load a trained model and vocabulary that you have fine-tuned
-        model = model_class.from_pretrained(args.output_dir)  # , force_download=True)
-        tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-        model.to(args.device)
-
-    # Evaluation - we can ask to evaluate all the checkpoints (sub-directories) in a directory
-    results = {}
-    if args.do_eval and args.local_rank in [-1, 0]:
-        if args.do_train:
-            logger.info("Loading checkpoints saved during training for evaluation")
-            checkpoints = [args.output_dir]
-            if args.eval_all_checkpoints:
-                checkpoints = list(
-                    os.path.dirname(c)
-                    for c in sorted(glob.glob(args.output_dir + "/**/" + WEIGHTS_NAME, recursive=True))
-                )
-                logging.getLogger("transformers.modeling_utils").setLevel(logging.WARN)  # Reduce model loading logs
-        else:
-            logger.info("Loading checkpoint %s for evaluation", args.model_name_or_path)
-            checkpoints = [args.model_name_or_path]
-
-        logger.info("Evaluate the following checkpoints: %s", checkpoints)
-
-        for checkpoint in checkpoints:
-            # Reload the model
-            global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
-            model = model_class.from_pretrained(checkpoint)  # , force_download=True)
-            model.to(args.device)
-
-            # Evaluate
-            result = evaluate(args, model, tokenizer, prefix=global_step)
-
-            result = dict((k + ("_{}".format(global_step) if global_step else ""), v) for k, v in result.items())
-            results.update(result)
-
-    logger.info("Results: {}".format(results))
-
-    return results
 
 
 if __name__ == "__main__":

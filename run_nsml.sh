@@ -2,11 +2,9 @@
 
 nsml run \
   -m 'kaist korquad open' \
-  -d korquad-open \
+  -d korquad-open-ldbd \
   -g 1 \
   -c 4 \
-  --gpu-model P40 \
-  --memory 32G \
   -e run_squad.py \
   -a "--model_type bert
     --model_name_or_path bert-base-multilingual-cased

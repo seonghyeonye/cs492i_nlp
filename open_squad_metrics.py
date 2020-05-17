@@ -7,7 +7,6 @@ https://github.com/huggingface/transformers/blob/master/src/transformers/data/me
 
 """
 
-
 import collections
 import json
 import logging
@@ -16,7 +15,6 @@ import re
 import string
 
 from transformers.tokenization_bert import BasicTokenizer
-
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +275,7 @@ def squad_open_evaluate(examples, preds, no_answer_probs=None, no_answer_probabi
 
     return evaluation
 
+
 def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
     """Project the tokenized prediction back to the original text."""
 
@@ -367,7 +366,7 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
             logger.info("Couldn't map end position")
         return orig_text
 
-    output_text = orig_text[orig_start_position : (orig_end_position + 1)]
+    output_text = orig_text[orig_start_position: (orig_end_position + 1)]
     return output_text
 
 
@@ -407,19 +406,19 @@ def _compute_softmax(scores):
 
 
 def compute_predictions_logits(
-    all_examples,
-    all_features,
-    all_results,
-    n_best_size,
-    max_answer_length,
-    do_lower_case,
-    output_prediction_file,
-    output_nbest_file,
-    output_null_log_odds_file,
-    verbose_logging,
-    version_2_with_negative,
-    null_score_diff_threshold,
-    tokenizer,
+        all_examples,
+        all_features,
+        all_results,
+        n_best_size,
+        max_answer_length,
+        do_lower_case,
+        output_prediction_file,
+        output_nbest_file,
+        output_null_log_odds_file,
+        verbose_logging,
+        version_2_with_negative,
+        null_score_diff_threshold,
+        tokenizer,
 ):
     """Write final predictions to the json file and log-odds of null if needed."""
     logger.info("Writing predictions to: %s" % (output_prediction_file))
@@ -515,10 +514,10 @@ def compute_predictions_logits(
                     break
                 feature = features[pred.feature_index]
                 if pred.start_index > 0:  # this is a non-null prediction
-                    tok_tokens = feature.tokens[pred.start_index : (pred.end_index + 1)]
+                    tok_tokens = feature.tokens[pred.start_index: (pred.end_index + 1)]
                     orig_doc_start = feature.token_to_orig_map[pred.start_index]
                     orig_doc_end = feature.token_to_orig_map[pred.end_index]
-                    orig_tokens = example.doc_tokens[orig_doc_start : (orig_doc_end + 1)]
+                    orig_tokens = example.doc_tokens[orig_doc_start: (orig_doc_end + 1)]
 
                     tok_text = tokenizer.convert_tokens_to_string(tok_tokens)
 
@@ -613,19 +612,19 @@ def compute_predictions_logits(
 
 
 def compute_predictions_log_probs(
-    all_examples,
-    all_features,
-    all_results,
-    n_best_size,
-    max_answer_length,
-    output_prediction_file,
-    output_nbest_file,
-    output_null_log_odds_file,
-    start_n_top,
-    end_n_top,
-    version_2_with_negative,
-    tokenizer,
-    verbose_logging,
+        all_examples,
+        all_features,
+        all_results,
+        n_best_size,
+        max_answer_length,
+        output_prediction_file,
+        output_nbest_file,
+        output_null_log_odds_file,
+        start_n_top,
+        end_n_top,
+        version_2_with_negative,
+        tokenizer,
+        verbose_logging,
 ):
     """ XLNet write prediction logic (more complex than Bert's).
         Write final predictions to the json file and log-odds of null if needed.
@@ -728,10 +727,10 @@ def compute_predictions_log_probs(
             # final_text = paragraph_text[start_orig_pos: end_orig_pos + 1].strip()
 
             # Previously used Bert untokenizer
-            tok_tokens = feature.tokens[pred.start_index : (pred.end_index + 1)]
+            tok_tokens = feature.tokens[pred.start_index: (pred.end_index + 1)]
             orig_doc_start = feature.token_to_orig_map[pred.start_index]
             orig_doc_end = feature.token_to_orig_map[pred.end_index]
-            orig_tokens = example.doc_tokens[orig_doc_start : (orig_doc_end + 1)]
+            orig_tokens = example.doc_tokens[orig_doc_start: (orig_doc_end + 1)]
             tok_text = tokenizer.convert_tokens_to_string(tok_tokens)
 
             # Clean whitespace
