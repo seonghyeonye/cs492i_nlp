@@ -55,7 +55,7 @@ from transformers.data.metrics.squad_metrics import (
 )
 from transformers.data.processors.squad import SquadResult, SquadV1Processor, SquadV2Processor
 '''
-# '''
+# ''
 # KorQuAD-Open-Naver-Search 사용할때 전처리 코드.
 from open_squad_metrics import (
     compute_predictions_log_probs,
@@ -106,7 +106,7 @@ def to_list(tensor):
 def _infer(model, tokenizer, my_args, root_path):
     my_args.data_dir = root_path
     _, predictions = predict(my_args, model, tokenizer, val_or_test="test")
-    qid_and_answers = ["{}\t{}".format(qid, answer) for qid, answer in predictions.items()]
+    qid_and_answers = [("test-{}".format(qid), answer) for qid, (_, answer) in enumerate(predictions.items())]
     return qid_and_answers
 
 
@@ -134,10 +134,10 @@ def bind_nsml(model, tokenizer, my_args):
         logger.info("Load model & tokenizer & args from {}".format(dir_name))
 
     def infer(root_path):
-        _infer_result = _infer(model, tokenizer, my_args, root_path)
-        for line in _infer_result:
-            assert len(line.split("\t")) == 2, "Result should be 'qid<TAB>answer' format, but '{}'".format(line)
-        return _infer_result
+        result = _infer(model, tokenizer, my_args, root_path)
+        for line in result:
+            assert type(tuple(line)) == tuple and len(line) == 2, "Wrong infer result: {}".format(line)
+        return result
 
     nsml.bind(save=save, load=load, infer=infer)
 
@@ -296,23 +296,23 @@ def train(args, train_dataset, model, tokenizer):
                 # Log metrics
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     # Only evaluate when single GPU otherwise metrics may not average well
-                    if args.local_rank == -1 and args.evaluate_during_training:
-                        results = evaluate(args, model, tokenizer)
-                        for key, value in results.items():
-                            logger.info("eval_{}\t{}\t{}".format(key, value, global_step))
-                    logger.info("[ {} ] loss : {}".format(global_step, (tr_loss - logging_loss) / args.logging_steps))
-                    logging_loss = tr_loss
+                    if args.evaluate_during_training:
+                        logger.info("Validation start for epoch {}".format(epoch))
+                        result = evaluate(args, model, tokenizer, prefix=epoch)
+                        _f1, _exact = result["f1"], result["exact"]
+                        is_best = _f1 > best_f1
+                        best_f1 = max(_f1, best_f1)
 
-                logger.info("Validation start for epoch {}".format(epoch))
-                result = evaluate(args, model, tokenizer, prefix=epoch)
-                _f1, _exact = result["f1"], result["exact"]
-                is_best = _f1 > best_f1
-                best_f1 = max(_f1, best_f1)
-                logger.info("best_f1_val = {}, f1_val = {}, exact_val = {}, average loss = {}, global_step = {}, " \
-                            .format(best_f1, _f1, _exact, tr_loss, global_step))
-                if is_best:
-                    if IS_ON_NSML:
-                        nsml.save(args.model_type + "_best")
+                        current_loss = (tr_loss - logging_loss) / args.logging_steps
+                        logging_loss = tr_loss
+
+                        logger.info(
+                            "best_f1_val = {}, f1_val = {}, exact_val = {}, loss = {}, global_step = {}, " \
+                            .format(best_f1, _f1, _exact, current_loss, global_step))
+                        if IS_ON_NSML:
+                            nsml.report(summary=True, step=global_step, f1=_f1, exact=_exact, loss=current_loss)
+                            if is_best:
+                                nsml.save(args.model_type + "_best")
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     if IS_ON_NSML:
@@ -340,6 +340,9 @@ def train(args, train_dataset, model, tokenizer):
         if 0 < args.max_steps < global_step:
             train_iterator.close()
             break
+
+    if IS_ON_NSML:
+        nsml.save(args.model_type + "_last")
 
     return global_step, tr_loss / global_step
 
@@ -656,7 +659,8 @@ def main():
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
     parser.add_argument(
-        "--evaluate_during_training", action="store_true", help="Rul evaluation during training at each logging step."
+        "--evaluate_during_training", default=True,
+        action="store_true", help="Run evaluation during training at each logging step."
     )
     parser.add_argument(
         "--do_lower_case", action="store_true", help="Set this flag if you are using an uncased model."
@@ -706,8 +710,8 @@ def main():
              "A number of warnings are expected for a normal SQuAD evaluation.",
     )
 
-    parser.add_argument("--logging_steps", type=int, default=50, help="Log every X updates steps.")
-    parser.add_argument("--save_steps", type=int, default=50, help="Save checkpoint every X updates steps.")
+    parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps.")
+    parser.add_argument("--save_steps", type=int, default=1000, help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--eval_all_checkpoints",
         action="store_true",
