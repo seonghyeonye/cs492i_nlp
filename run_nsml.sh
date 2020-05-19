@@ -4,7 +4,7 @@ nsml run \
   -m 'kaist korquad open' \
   -d korquad-open-ldbd \
   -g 1 \
-  -c 4 \
+  -c 1 \
   -e run_squad.py \
   -a "--model_type bert
     --model_name_or_path bert-base-multilingual-cased

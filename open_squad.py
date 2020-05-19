@@ -9,6 +9,7 @@ https://github.com/huggingface/transformers/blob/master/src/transformers/data/pr
 import json
 import logging
 import os
+import sys
 from functools import partial
 from multiprocessing import Pool, cpu_count
 
@@ -27,6 +28,8 @@ if is_tf_available():
     import tensorflow as tf
 
 logger = logging.getLogger(__name__)
+handler = logging.StreamHandler(sys.stdout)
+logger.addHandler(handler)
 
 
 def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer, orig_answer_text):
@@ -101,7 +104,7 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
         actual_text = " ".join(example.doc_tokens[start_position: (end_position + 1)])
         cleaned_answer_text = " ".join(whitespace_tokenize(example.answer_text))
         if actual_text.find(cleaned_answer_text) == -1:
-            logger.warning("Could not find answer: '%s' vs. '%s'", actual_text, cleaned_answer_text)
+            # logger.warning("Could not find answer: '%s' vs. '%s'", actual_text, cleaned_answer_text)
             return []
 
     tok_to_orig_index = []
@@ -260,6 +263,13 @@ def squad_convert_example_to_features_init(tokenizer_for_convert):
     tokenizer = tokenizer_for_convert
 
 
+def squad_convert_example_to_features_sp(example, max_seq_length, doc_stride, max_query_length, is_training,
+                                         tokenizer_for_convert):
+    global tokenizer
+    tokenizer = tokenizer_for_convert
+    return squad_convert_example_to_features(example, max_seq_length, doc_stride, max_query_length, is_training)
+
+
 def squad_convert_examples_to_features(
         examples, tokenizer, max_seq_length, doc_stride, max_query_length, is_training, return_dataset=False, threads=1
 ):
@@ -301,21 +311,37 @@ def squad_convert_examples_to_features(
     # Defining helper methods
     features = []
     threads = min(threads, cpu_count())
-    with Pool(threads, initializer=squad_convert_example_to_features_init, initargs=(tokenizer,)) as p:
-        annotate_ = partial(
-            squad_convert_example_to_features,
-            max_seq_length=max_seq_length,
-            doc_stride=doc_stride,
-            max_query_length=max_query_length,
-            is_training=is_training,
-        )
-        features = list(
-            tqdm(
-                p.imap(annotate_, examples, chunksize=32),
-                total=len(examples),
-                desc="convert squad examples to features",
+    if threads == 1:
+        print("squad_convert_examples_to_features")
+        features = []
+        for eg in tqdm(examples, total=len(examples), desc="convert squad examples to features"):
+            feat = squad_convert_example_to_features_sp(
+                eg,
+                max_seq_length=max_seq_length,
+                doc_stride=doc_stride,
+                max_query_length=max_query_length,
+                is_training=is_training,
+                tokenizer_for_convert=tokenizer)
+            features.append(feat)
+
+    else:
+        print("squad_convert_examples_to_features w/ {} threads".format(threads))
+        with Pool(threads, initializer=squad_convert_example_to_features_init, initargs=(tokenizer,)) as p:
+            annotate_ = partial(
+                squad_convert_example_to_features,
+                max_seq_length=max_seq_length,
+                doc_stride=doc_stride,
+                max_query_length=max_query_length,
+                is_training=is_training,
             )
-        )
+            features = list(
+                tqdm(
+                    p.imap(annotate_, examples, chunksize=32),
+                    total=len(examples),
+                    desc="convert squad examples to features",
+                )
+            )
+
     new_features = []
     unique_id = 1000000000
     example_index = 0
@@ -517,6 +543,11 @@ class SquadProcessor(DataProcessor):
 
         has_answer_cnt, no_answer_cnt = 0, 0
         for entry in tqdm(input_data[:]):
+
+            # For debugging
+            # if has_answer_cnt > 5:
+            #    break
+
             qa = entry['qa']
             question_text = qa["question"]
             answer_text = qa['answer']

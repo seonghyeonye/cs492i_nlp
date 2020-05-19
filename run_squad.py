@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import timeit
+import sys
 
 import numpy as np
 import torch
@@ -43,8 +44,8 @@ from transformers import (
     XLNetForQuestionAnswering,
     XLNetTokenizer,
     get_linear_schedule_with_warmup,
-    squad_convert_examples_to_features,
 )
+from open_squad import squad_convert_examples_to_features
 
 '''
 from transformers.data.metrics.squad_metrics import (
@@ -63,17 +64,14 @@ from open_squad_metrics import (
 )
 from open_squad import SquadResult, SquadV1Processor, SquadV2Processor
 
-# '''
-
-try:
-    from torch.utils.tensorboard import SummaryWriter
-except ImportError:
-    from tensorboardX import SummaryWriter
-
-from nsml import DATASET_PATH, IS_ON_NSML
 import nsml
+from nsml import DATASET_PATH, IS_ON_NSML
+if not IS_ON_NSML:
+    DATASET_PATH = "../korquad-open-ldbd/"
 
 logger = logging.getLogger(__name__)
+handler = logging.StreamHandler(sys.stdout)
+logger.addHandler(handler)
 
 ALL_MODELS = sum(
     (tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, RobertaConfig, XLNetConfig, XLMConfig)),
@@ -106,6 +104,7 @@ def to_list(tensor):
 
 
 def _infer(model, tokenizer, my_args, root_path):
+    my_args.data_dir = root_path
     _, predictions = predict(my_args, model, tokenizer, val_or_test="test")
     qid_and_answers = ["{}\t{}".format(qid, answer) for qid, answer in predictions.items()]
     return qid_and_answers
@@ -117,26 +116,27 @@ def bind_nsml(model, tokenizer, my_args):
         os.makedirs(dir_name, exist_ok=True)
 
         torch.save(model.state_dict(), os.path.join(dir_name, 'model.pt'))
-        tokenizer.save_pretrained(os.path.join(dir_name, 'tokenizer'))
+        torch.save(tokenizer, os.path.join(dir_name, 'tokenizer'))
         torch.save(my_args, os.path.join(dir_name, "my_args.bin"))
 
-        logger.info("Save model/tokenizer/args at {}".format(dir_name))
+        logger.info("Save model & tokenizer & args at {}".format(dir_name))
 
     def load(dir_name, *args, **kwargs):
         state = torch.load(os.path.join(dir_name, 'model.pt'))
         model.load_state_dict(state)
 
-        temp_tokenizer = tokenizer.from_pretrained(os.path.join(dir_name, 'tokenizer'))
-        nsml.copy(temp_tokenizer, tokenizer)
-
         temp_my_args = torch.load(os.path.join(dir_name, "my_args.bin"))
         nsml.copy(temp_my_args, my_args)
 
-        logger.info("Load model/tokenizer/args from {}".format(dir_name))
+        temp_tokenizer = torch.load(os.path.join(dir_name, 'tokenizer'))
+        nsml.copy(temp_tokenizer, tokenizer)
+
+        logger.info("Load model & tokenizer & args from {}".format(dir_name))
 
     def infer(root_path):
         _infer_result = _infer(model, tokenizer, my_args, root_path)
-        assert len(_infer_result[0].split("\t")) == 2, "Result should be 'qid<TAB>answer' format"
+        for line in _infer_result:
+            assert len(line.split("\t")) == 2, "Result should be 'qid<TAB>answer' format, but '{}'".format(line)
         return _infer_result
 
     nsml.bind(save=save, load=load, infer=infer)
@@ -312,11 +312,11 @@ def train(args, train_dataset, model, tokenizer):
                             .format(best_f1, _f1, _exact, tr_loss, global_step))
                 if is_best:
                     if IS_ON_NSML:
-                        nsml.save(args.model_name_or_path + "_best")
+                        nsml.save(args.model_type + "_best")
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     if IS_ON_NSML:
-                        nsml.save(args.model_name_or_path + "_gs{}_e{}".format(global_step, epoch))
+                        nsml.save(args.model_type + "_gs{}_e{}".format(global_step, epoch))
                     else:
                         output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
                         if not os.path.exists(output_dir):
@@ -530,6 +530,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
             else:
                 examples = processor.get_train_examples(args.data_dir, filename=args.train_file)
 
+        print("Starting squad_convert_examples_to_features")
         features, dataset = squad_convert_examples_to_features(
             examples=examples,
             tokenizer=tokenizer,
@@ -540,6 +541,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
             return_dataset="pt",
             threads=args.threads,
         )
+        print("Complete squad_convert_examples_to_features")
 
         # if args.local_rank in [-1, 0]:
         #    logger.info("Saving features into cached file %s", cached_features_file)

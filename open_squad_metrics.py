@@ -13,10 +13,13 @@ import logging
 import math
 import re
 import string
+import sys
 
 from transformers.tokenization_bert import BasicTokenizer
 
 logger = logging.getLogger(__name__)
+handler = logging.StreamHandler(sys.stdout)
+logger.addHandler(handler)
 
 
 def normalize_answer(s):
