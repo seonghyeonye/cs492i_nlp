@@ -543,11 +543,6 @@ class SquadProcessor(DataProcessor):
 
         has_answer_cnt, no_answer_cnt = 0, 0
         for entry in tqdm(input_data[:]):
-
-            # For debugging
-            # if has_answer_cnt > 5:
-            #    break
-
             qa = entry['qa']
             question_text = qa["question"]
             answer_text = qa['answer']
@@ -597,9 +592,8 @@ class SquadProcessor(DataProcessor):
                     continue
                 # train 메모리때문에 개수제한
                 per_qa_paragraph_cnt += 1
-                # if is_training:
-                #    if per_qa_paragraph_cnt > 3: # k -1 개까지만 사용
-                #        break
+                if is_training and per_qa_paragraph_cnt > 3:
+                    break
                 examples.append(example)
 
         print("[{}] Has Answer({}) / No Answer({})".format(set_type, has_answer_cnt, no_answer_cnt))
