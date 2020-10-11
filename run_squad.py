@@ -445,6 +445,7 @@ def predict(args, model, tokenizer, prefix="", val_or_test="val"):
     else:
         output_null_log_odds_file = None
 
+    is_test = (val_or_test == "test")
     # XLNet and XLM use a more complex post-processing procedure
     if args.model_type in ["xlnet", "xlm"]:
         start_n_top = model.config.start_n_top if hasattr(model, "config") else model.module.config.start_n_top
@@ -464,6 +465,7 @@ def predict(args, model, tokenizer, prefix="", val_or_test="val"):
             args.version_2_with_negative,
             tokenizer,
             args.verbose_logging,
+            is_test=is_test,
         )
     else:
         predictions = compute_predictions_logits(
@@ -480,7 +482,7 @@ def predict(args, model, tokenizer, prefix="", val_or_test="val"):
             args.version_2_with_negative,
             args.null_score_diff_threshold,
             tokenizer,
-            is_test=(val_or_test == "test"),
+            is_test=is_test,
         )
 
     return examples, predictions

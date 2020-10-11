@@ -590,10 +590,12 @@ class SquadProcessor(DataProcessor):
 
                 if is_impossible and per_qa_unans_paragraph_cnt > 3:
                     continue
-                # train 메모리때문에 개수제한
+
+                # todo: How to select training samples considering a memory limit.
                 per_qa_paragraph_cnt += 1
                 if is_training and per_qa_paragraph_cnt > 3:
                     break
+
                 examples.append(example)
 
         print("[{}] Has Answer({}) / No Answer({})".format(set_type, has_answer_cnt, no_answer_cnt))
