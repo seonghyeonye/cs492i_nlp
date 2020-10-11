@@ -1,5 +1,5 @@
-# korquad-open-cs492h
-Korquad-Open Baseline Code for KAIST CS492H 2020 Spring
+# korquad-open-cs492I
+KorQuad-Open Baseline Code for KAIST CS492I 2020 Fall
 
 ## Original Author
 Seonhoon Kim (Naver)
