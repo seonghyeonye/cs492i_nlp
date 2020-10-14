@@ -134,6 +134,7 @@ def bind_nsml(model, tokenizer, my_args):
         logger.info("Load model & tokenizer & args from {}".format(dir_name))
 
     def infer(root_path):
+        """NSML will record f1-score based on predictions from this method."""
         result = _infer(model, tokenizer, my_args, root_path)
         for line in result:
             assert type(tuple(line)) == tuple and len(line) == 2, "Wrong infer result: {}".format(line)
