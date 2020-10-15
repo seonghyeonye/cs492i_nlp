@@ -2,7 +2,7 @@
 
 nsml run \
   -m 'kaist korquad open' \
-  -d korquad-open-ldbd \
+  -d korquad-open-ldbd3 \
   -g 1 \
   -c 1 \
   -e run_squad.py \

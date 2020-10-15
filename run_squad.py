@@ -67,7 +67,7 @@ from open_squad import SquadResult, SquadV1Processor, SquadV2Processor
 import nsml
 from nsml import DATASET_PATH, IS_ON_NSML
 if not IS_ON_NSML:
-    DATASET_PATH = "../korquad-open-ldbd/"
+    DATASET_PATH = "../korquad-open-ldbd3/"
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler(sys.stdout)
