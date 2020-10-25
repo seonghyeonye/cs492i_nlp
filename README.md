@@ -24,7 +24,7 @@ We deal with a QA task with a single question and multiple contexts (i.e., parag
 See the codes:
 - https://github.com/dongkwan-kim/korquad-open-cs492i/blob/master/open_squad_metrics.py#L412
 - https://github.com/dongkwan-kim/korquad-open-cs492i/blob/master/open_squad_metrics.py#L639
-- https://github.com/dongkwan-kim/korquad-open-cs492i/blob/master/run_squad.py#L357
+- https://github.com/dongkwan-kim/korquad-open-cs492i/blob/master/run_squad.py#L358
 
 **NOTE: In the baseline, you can find the huge gap between validation and test performances (f1-score), since the f1-score for the validation is measured per paragraph, and the f1-score for the test is measured per question.**
 
