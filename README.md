@@ -28,6 +28,9 @@ See the codes:
 
 **NOTE: In the baseline, you can find the huge gap between validation and test performances (f1-score), since the f1-score for the validation is measured per paragraph, and the f1-score for the test is measured per question.**
 
+![val_f1](https://raw.githubusercontent.com/dongkwan-kim/korquad-open-cs492i/master/static/val_f1.png)
+![test_f1](https://raw.githubusercontent.com/dongkwan-kim/korquad-open-cs492i/master/static/test_f1.png)
+
 ### Improve how to select training samples considering a memory limit.
 
 There are multiple contexts, but since there is a memory limit, we cannot include everything in training. The baseline is using first three samples in sequence. Which training samples should we choose to learn the best representation? 
